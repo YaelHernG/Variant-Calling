@@ -12,7 +12,7 @@ This project performs a comprehensive variant calling analysis on Saccharomyces 
 
    Multi-sample VCF files generated and filtered.
 
-3. Variant Filtering
+2. Variant Filtering
 
    Applied quality filters: QUAL >= 30, DP > 30, and AD[*:1] >= 50.
 
@@ -20,25 +20,25 @@ This project performs a comprehensive variant calling analysis on Saccharomyces 
 
    Transition/transversion (Ts/Tv) ratio calculated before and after filtering.
 
-5. Comparative Genomics
+3. Comparative Genomics
 
    Variants unique to evolved strains (IMW004, IMW005) identified by comparing with the parental strain.
 
    Intersection and difference operations performed using bcftools isec.
 
-7. Variant Annotation with VEP
+4. Variant Annotation with VEP
 
    Variants annotated using Ensembl VEP (vep --cache) with the Saccharomyces cerevisiae reference.
 
    Consequences parsed to identify impactful variants: missense, stop gained, frameshift, splice variants.
 
-9. Candidate Gene Prioritization
+5. Candidate Gene Prioritization
 
    Genes mutated in both IMW004 and IMW005 strains were identified as candidates.
 
    The gene ADY2 was confirmed to be mutated in both strains, consistent with published findings.
 
-11. Ensembl REST API Integration
+6. Ensembl REST API Integration
 
    Used Ensembl REST API to retrieve detailed annotations for all candidate genes.
    
@@ -69,7 +69,7 @@ Perl (for parsing annotated VCFs)
 
 bash (SGE job scripts)
 
-[Report]()
+[Report](https://yaelherng.github.io/Variant-Calling/)
 
 Kok et al. (2012): Laboratory evolution of new lactate transporter genes in a jen1D mutant of Saccharomyces cerevisiae and their identification as ADY2 alleles by whole-genome resequencing and transcriptome analysis. FEMS Yeast Res, 12:359-74.
 
