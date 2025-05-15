@@ -1,0 +1,930 @@
+---
+title: "Variant Calling Exercise"
+author: "Yael Daniel Hernandez Gonzalez"
+date: "`r Sys.Date()`"
+output: 
+  html_document: # El output controla los parámetros de salida del renderizado
+    collapsed: false            # Contraer celdas de salida
+    code_folding: show          # Mostrar el código
+    toc: true                   # Mostrar la tabla de contenidos
+    toc_depth: 4                # Niveles de títulos que se mostrarán
+    toc_float: true             # Índices o contenidos flotantes
+    smooth_scroll: true         # Activar el scroll
+    highlight: kate             # Destacar
+    df_print: paged             # Mostrar los dataframes en páginas
+    number_sections: false       # Numeración de contenidos
+    theme: flatly
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# **Day 1:** The problem
+
+Wild-type laboratory strains of *Saccharomyces cerevisiae*, like the
+reference strain S288C or the widely used strain CEN.PK113-7D can grow
+on a variety of carbon sources including lactate.
+
+In a publication from a few years ago^1^, a knock-out mutant strain
+based on CEN.PK113-7D was generated, in which the gene for the only
+known lactate transporter in yeast, *jen1*, is disrupted by an inserted
+reporter cassete. As expected, this strain cannot use lactate as a
+carbon source. Laboratory evolution was used then on this strain to
+obtain two substrains that had regained the ability to grow on lactate.
+Both substrains, IMW004 and IMW005, were subjected to WGS to gain
+insight into the genomic changes that these strains had undergone
+compared to CEN.PK113-7D over \~100 generations of laboratory evolution
+and that might explain their ability to grow on lactate despite the
+disruption of the *jen1* gene.
+
+Strikingly, the substrains harbored independent point mutations in the
+acetate transporter gene *ADY2* and subsequent experiments showed that
+these mutations are likely to cause changes in the substrate specificity
+of this transporter.
+
+Go to `/mnt/atgc-d2/bioinfoII/drobles/variant_calling/data/`. There, you
+will find:
+
+-   The S288C reference sequence in FASTA format (S288C_ref.fa) and its
+    index (S288C_ref.fa.fai)
+
+-   a BAM file of NGS reads from the CEN.PK113-7D parent strain (reads
+    are a random subset of those available through the NCBI SRA under
+    accession number SRX129922) (SRR445715.aligned.sorted.bam) and its
+    index (SRR445715.aligned.sorted.bam.bai)
+
+-   a BAM file of NGS reads from the lab-evolved substrain IMW004 (same
+    reads as available under the NCBI SRA accession number SRX129995),
+    (SRR445716.aligned.sorted.bam) and its index
+    (SRR445716.aligned.sorted.bam.bai)
+
+-   a BAM file of NGS reads from the lab-evolved substrain IMW005 (same
+    reads as available under the NCBI accession number SRX129996)
+    (SRR445717.aligned.sorted.bam) and its index
+    (SRR445717.aligned.sorted.bam.bai)
+
+-   Other files related to the work in this module (you can check the
+    readme inside this directory if you're curious)
+
+During this week, we will replicate the findings of the original paper
+by performing variant calling and quality filtering, and using Ensembl
+VEP to predict variant consequences.
+
+^1^Kok *et al*. (2012): Laboratory evolution of new lactate transporter
+genes in a jen1D mutant of Saccharomyces cerevisiae and their
+identification as ADY2 alleles by whole-genome resequencing and
+transcriptome analysis. *FEMS Yeast Res*, **12**:359-74.
+
+## 1. Understanding our data
+
+```         
+cd /mnt/atgc-d1/bioinfoII/yhernandezg/ExerciseVariantCalling
+module load samtools/1.10
+
+samtools stats -r /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445715.aligned.sorted.bam > SRR445715.stats
+samtools stats -r /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445716.aligned.sorted.bam > SRR445716.stats
+samtools stats -r /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445717.aligned.sorted.bam > SRR445717.stats
+
+
+plot-bamstats -r /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/other_files/S288C_ref.fa.gc -p SRR445715.graphs/ SRR445715.stats
+plot-bamstats -r /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/other_files/S288C_ref.fa.gc -p SRR445716.graphs/ SRR445716.stats
+plot-bamstats -r /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/other_files/S288C_ref.fa.gc -p SRR445717.graphs/ SRR445717.stats
+
+rsync -chavzP --stats yhernandezg@dna.lavis.unam.mx:/mnt/atgc-d1/bioinfoII/yhernandezg/ExerciseVariantCalling/SRR44571*.graphs /home/yael/2025-2/Genomica del Cancer/variant_calling_exercise
+```
+
+[**What is the percentage of mapped reads in all three files? Check the
+insert size, GC content, per-base sequence content and quality per cycle
+graphs. Do they all look reasonable?**]{.underline}
+
+All three datasets have **high mapping percentages (\~96--97%)**,
+indicating good alignment quality.
+
+| File      | Total Reads | Mapped Reads | Mapped % |
+|-----------|-------------|--------------|----------|
+| SRR445715 | 17,964,244  | 17,503,811   | 97.4%    |
+| SRR445716 | 12,870,162  | 12,428,002   | 96.6%    |
+| SRR445717 | 13,730,526  | 13,230,229   | 96.4%    |
+
+Insert size:
+
+-   The insert size distribution appears **reasonable**, centered as
+    expected for typical paired-end libraries.
+
+-   There is no evidence of major contamination or fragmentation
+    anomalies.
+
+GC Content:
+
+-   GC content is within a **normal distribution range** (bell-shaped
+    curve).
+
+-   No major GC bias is apparent.
+
+Per-base Sequence Content:
+
+-   Slight **imbalance at the beginning of reads** is visible (common in
+    many libraries due to random priming or adapter trimming).
+
+-   Otherwise, base composition stabilizes along the length, suggesting
+    acceptable quality.
+
+Quality per cycle:
+
+-   Quality scores are **high throughout** the read cycles in all three
+    files.
+
+-   Minimal degradation over cycles; no severe drops at ends.
+
+All quality metrics---**mapped reads, insert size, GC content, per-base
+content, and quality per cycle**---are **within expected and acceptable
+ranges**. The datasets are of **good quality** and suitable for
+downstream analysis.
+
+## 2. Generating a pileup
+
+```         
+samtools mpileup  -f /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445715.aligned.sorted.bam | less -S
+```
+
+[**What is the read depth at position chrI:29519? What is the reference
+base? Are there any non-reference bases?**]{.underline}
+
+```         
+chrI    29519   A       56      ,$,,.,.,..,,,,..,..,……….,.,,.,,……..,……….,       BCB=A4BB9>BB@?A>B>B?BBBA@A?CB7?C8AB=@BBBCB=B@@@BBCAC?B00
+```
+
+Read depth: 56
+
+Reference base: A
+
+Non-reference bases: None detected (all reads appear to match the
+reference)
+
+[**What about at position chrI:29522? What is the reference base? Are
+there any non-reference bases?**]{.underline}
+
+```         
+chrI    29522   T       46      aaaaAaAAaAAAAAAAAAAaAaaAaaAAAAAAAAaAAAAAAAAAAa  8;??>:4BB@BABB;A=BABBCBBB?ABA=CABBBAAABC5CAB00
+```
+
+Read depth: 46
+
+Reference base: T
+
+Non-reference bases: A (possible T -\> A substitution)
+
+## 3. Generating genotype likelihoods and variant calling
+
+```         
+module load bcftools/1.10.2
+
+bcftools mpileup -f /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445715.aligned.sorted.bam | bcftools call -m --ploidy 1  | less -S
+```
+
+[**Study the command. Why did we use these settings? If you were
+performing variant calling in human data, what settings would you
+use?**]{.underline}
+
+Is used for variant calling in a haploid organism.
+
+Where:
+
+-   bcftools mpileup: Generates genotype likehoods and raw information
+    about sequencing reads aligned to the reference genome
+
+-   -f S288C_ref.fa : Specifies the reference genome.
+
+-   -m : Calls variants using the multiallelic model
+
+-   --ploidy 1: Specifies haploid ploidy because yeast
+
+-   If performing variant calling on human data, the settings would
+    change
+
+-   Human are diploid, so we would replace --ploidy 1 with --ploidy 2.
+
+[**What option should we add to only print variant sites?**]{.underline}
+
+To output only variant sites (excluding positions) where no variants are
+detected), we need to add the -v flag in bcftools call
+
+```         
+bcftools mpileup -a AD -f /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445715.aligned.sorted.bam -Ou | bcftools call -mv --ploidy 1 -o SRR445715.vcf
+
+bcftools mpileup -a AD -f /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445716.aligned.sorted.bam -Ou | bcftools call -mv --ploidy 1 -o SRR445716.vcf
+
+bcftools mpileup -a AD -f /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445717.aligned.sorted.bam -Ou | bcftools call -mv --ploidy 1 -o SRR445716.vcf
+
+less -S SRR445717.vcf
+```
+
+[**What is the reference and variant base at position
+chrIV:122724?**]{.underline}
+
+```         
+chrIV   122724  .   G   A   225 .   DP=58;VDB=0.0205157;SGB=-0.693147;MQSB=1;MQ0F=0;AC=1;AN=1;DP4=0,0,27,26;MQ=60   GT:PL:AD    1:255,0:0,53
+```
+
+The reference base is G
+
+The variant (alternative) base is A
+
+[**What is the total read depth at position chrIV:122724?**]{.underline}
+
+The total read depth at position is 58
+
+What is the number of high-quality forward reads supporting the variant
+call at position chrIV:122724? How many reads support the reference
+allele?
+
+The high-quality forward read supporting the variant (A) is 27
+
+And the total reads supporting the reference (G) is 0 (none detected)
+
+[**What sort of event is happening at position
+chrI:29007?**]{.underline}
+
+```         
+chrI 29007 . T TG 122 . INDEL;IDV=23;IMF=0.958333;DP=24;VDB=0.0158681;SGB=-0.636426;MQSB=0.882497;MQ0F=0;AC=1;AN=1;DP4=4,13,2,5;MQ=35 GT:PL:AD 1:149,0:17,7
+```
+
+The reference allele is T, and variant allele is TG. Indicates that is a
+variant base. Is an insertion event (indel)
+
+## 4. Variant filtering
+
+In the series of commands we will learn how to filter and extract
+information from VCFs. Most of the `bcftools` commands accept the `-i`,
+`--include` and `-e`, `--exclude` options which will come handy when
+filtering using fixed thresholds (you can look at the `bcftools`
+documentation here: <http://www.htslib.org/doc/bcftools.html>). We will
+estimate the quality of the callset by calculating the
+transition/transversion ratio
+
+In order to verify that the filtering expression has the desired effect,
+it is useful to first run a few small tests. Let's start with printing a
+simple list of positions from the VCF using the bcftools query command
+(manual) and pipe through the head command to trim the output after a
+few lines:
+
+```         
+bcftools query -f'POS = %POS\n' SRR445715.vcf | head
+```
+
+```         
+POS = 83
+POS = 136
+POS = 262
+POS = 286
+POS = 305
+POS = 476
+POS = 485
+POS = 610
+POS = 633
+POS = 654
+```
+
+The formatting expression "`POS = %POS\n`" was expanded for each line in
+the VCF and consisted of the string "`POS =`", which was printed on the
+output unchanged, the string with a special meaning "`%POS`", which was
+replaced by the `POS` column for each line, and the new line character
+"", which put the new line character after each VCF record. (If it were
+not present, the positions from the entire VCF would be printed on a
+single line.)
+
+Now add REF and ALT allele to the output, separated by a comma
+
+```         
+bcftools query -f'%POS %REF,%ALT\n' SRR445715.vcf | head
+```
+
+```         
+83 AG,A
+136 G,A
+262 A,G
+286 A,T
+305 C,G
+476 G,T
+485 T,C
+610 G,A
+633 T,C
+654 C,T
+```
+
+In the next step add also the quality, genotype and sequencing depth to
+the output. For the depth, check the `AD` annotation, which gives the
+number of reads observed for each reference and alternate alleles. For
+example, if there were 3 reads with the reference allele and 5 reads
+with the alternate allele, the `AD` field would be `AD=3,5`. Note that
+the FORMAT fields must be enclosed within square brackets "[]" to
+iterate over all samples in the VCF.
+
+To illustrate this, first let's make a combined VCF:
+
+```         
+module load htslib/1.9
+bgzip SRR445715.vcf
+bgzip SRR445716.vcf
+bgzip SRR445717.vcf
+bcftools index SRR445715.vcf.gz
+bcftools index SRR445716.vcf.gz
+bcftools index SRR445717.vcf.gz
+bcftools merge -0 -o combined.vcf SRR445715.vcf.gz SRR445716.vcf.gz SRR445717.vcf.gz
+```
+
+```         
+bcftools query -f'%POS %QUAL [%GT %AD  ] %REF %ALT\n' combined.vcf | head
+```
+
+```         
+83 154 1 0,11  1 2,21  1 1,12   AG A
+136 149 1 0,27  1 0,68  1 0,33   G A
+244 20.8314 0 .  0 .  1 7,15   C CT
+262 5.13241 1 11,12  0 .  0 .   A G
+286 223 1 0,43  1 0,83  1 0,40   A T
+305 203 1 0,48  1 0,67  1 0,36   C G
+476 166 1 0,31  1 0,44  1 0,23   G T
+485 66 1 0,11  0 .  0 .   T C
+509 23.5345 0 .  0 .  1 9,20   G A
+546 15.6659 0 .  0 .  1 37,41   C T
+```
+
+[**Can you print rows with `QUAL` bigger than 30 and with at least 50
+alternate reads?**]{.underline}
+
+For this we will need to query the second value of the `AD` field. Note
+that the indexes are zero-based; the first `AD` value is represented as
+"`AD[0]`", therefore the second value must be queried as "`AD[1]>=50`".
+However, you will also need to indicate which sample to look at, to look
+at any sample you can use the asterisk (e.g. the instruction would look
+like "`AD[*:1]>=50`") **Hint**: If you get stuck, look at the examples
+that Petr Danecek (pd3) explained here:
+<https://github.com/samtools/bcftools/issues/757>
+
+Yes, with this command
+
+```         
+bcftools query -f'%POS %QUAL [%GT %AD  ] %REF %ALT\n' -i'QUAL>=30 && AD[*:1]>=50' combined.vcf | head
+```
+
+```         
+136 149 1 0,68   G A
+286 223 1 0,83   A T
+305 203 1 0,67   C G
+610 225 1 0,58  1 0,106  1 0,76   G A
+633 227 1 27,99  1 18,67   T C
+681 225 1 0,57   G A
+686 161 1 21,64   A G
+778 228 1 0,63  1 12,57   A G
+1008 225 1 0,81  1 0,60   A G
+1013 225 1 0,79  1 0,68   T C
+```
+
+Finally, use the following command to obtain the ts/tv of an unfiltered
+callset.
+
+```         
+bcftools stats SRR445715.vcf.gz | grep TSTV | cut -f5
+```
+
+```         
+# TSTV, transitions/transversions:
+[5]ts/tv
+2.94
+```
+
+[**How does the ts/tv change if you apply the filters
+above?**]{.underline} Use the `bcftools stats` command with the `-i`
+option to include calls with `QUAL` at least 30 and the number of
+alternate reads at least 50.
+
+The command that I used for apply the filters is:
+
+```         
+bcftools stats -i'QUAL>=30 && AD[*:1]>=50' SRR445715.vcf.gz | grep TSTV | cut -f5
+```
+
+```         
+# TSTV, transitions/transversions:
+[5]ts/tv
+3.31
+```
+
+The original ratio without the filters is 2.94 and this change to 3.31
+when apply the filters above.
+
+[**What is the ts/tv of removed sites?**]{.underline}
+
+```         
+bcftools stats -e'QUAL>=30 && AD[*:1]>=50' SRR445715.vcf.gz | grep TSTV | cut -f5
+```
+
+```         
+# TSTV, transitions/transversions:
+[5]ts/tv
+2.46
+```
+
+The ts/tv of **removed sites** is 2.46.
+
+Another useful command is `filter` which allows you to annotate the VCF
+file with soft filters based on the given expression, rather than
+removing the sites completely. Can you apply the above filters to
+produce a final callset and apply the -g and -G options to soft filter
+variants around indels?
+
+```         
+bcftools filter -sLowQual -m+ -i'QUAL>=30 && AD[*:1]>=50' -g8 -G10 combined.vcf -o combined.flt.vcf
+```
+
+[**Can you see why position chrI:1101 passed these filters? And why did
+position chrI:1107 fail the filtering step?**]{.underline}
+
+ChrI:1101
+
+```         
+chrI    1101    .   G   A   152 PASS    VDB=0.254259;SGB=-0.693139;MQSB=0;MQ0F=0.0263158;MQ=27;DP=132;DP4=0,0,4,121;AN=3;AC=3   GT:PL:AD    1:182,0:0,36    1:172,0:0,58    1:104,0:0,31
+```
+
+ChrI:1107
+
+```         
+chrI    1107    .   T   C   84  LowQual VDB=0.00141136;SGB=-0.690438;RPB=0.0691938;MQB=0.0756927;MQSB=0.0144103;BQB=0.242036;MQ0F=0.0416667;MQ=24;DP=79;DP4=5,0,1,70;AN=3;AC=3  GT:PL:AD    1:116,5:5,17    1:114,0:0,32    1:84,0:0,22
+```
+
+The chrI:1101 position passed the filters because it meets the quality
+criteria (QUAL \>= 30) and has at least one sample with sufficient
+alternative readings (AD[\*:1] \>= 50). There is no indication that it
+is near an indel (it was not affected by -g8 or -G10).
+
+On the other hand, position 1107 did not pass filters because no sample
+has at least 50 alternative readings (AD[\*:1] \>= 50). Even if it has
+good quality greater than 30.
+
+## 5. Multi-sample variant calling
+
+Many experiments involve sequencing multiple samples to compare the
+genetic variation between the samples. Therefore, we need to have a
+genotype for each sample at all variant sites. Typically this is
+achieved by carrying out multi-sample variant calling where all of the
+sequencing data is given to the variant caller simultaneously.
+
+There are three BAM files in the original directory
+`/mnt/atgc-d2/bioinfoII/drobles/variant_calling/data/`.
+
+[**Can you modify the command from section 3 to use all three BAM files
+and only write out variant sites in *chromosome I*?**]{.underline} Write
+the output to a compressed BCF file called multi.bcf and index the file
+afterwards.
+
+The command that realize this is:
+
+```         
+bcftools mpileup -Ou -f /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/S288C_ref.fa -r chrI  -a AD /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445715.aligned.sorted.bam /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445716.aligned.sorted.bam /mnt/atgc-d1/bioinfoII/drobles/variant_calling/data/SRR445717.aligned.sorted.bam | bcftools call -mv -Ob -o multi.bcf
+```
+
+Now we index the multi.vcf
+
+```         
+bcftools index multi.bcf
+```
+
+[**Can you apply the same filters as before? How many sites pass the
+filters? Write the output to a BCF file called multi.filt.bcf and index
+the file.**]{.underline}
+
+The command that we use to filtering is:
+
+```         
+bcftools filter -sLowQual -m+ -i'QUAL>=30 && AD[*:1]>=50' -g8 -G10 multi.bcf -o multi.filt.bcf
+```
+
+Then we index the filtered BCF file and count the variants that passing
+sites with:
+
+```         
+bcftools index multi.filt.bcf
+bcftools view -f PASS multi.filt.bcf | grep -vc "^#"
+```
+
+477 variants passed the filters
+
+[**What is the ts/tv of the raw calls and of the filtered
+set?**]{.underline}
+
+For unfiltered calls we use the command to obtain the ratio ts/tv
+
+```         
+bcftools stats multi.bcf | grep TSTV | cut -f5
+```
+
+```         
+# TSTV, transitions/transversions:
+[5]ts/tv
+2.51
+```
+
+And we have a 2.51 ratio ts/tv. Then we use the next command for
+filtered set of variants.
+
+We create a new file whit only the variants passed the filtering
+
+```         
+bcftools view -f PASS multi.filt.bcf -Ob -o multi.filt.PASS.bcf
+bcftools stats multi.filt.PASS.bcf | grep TSTV | cut -f5
+```
+
+```         
+# TSTV, transitions/transversions:
+[5]ts/tv
+3.14
+```
+
+This gives us a ratio for the variants that passed the filter of 3.14
+
+# **Day 2 :** VEP and more `bcftools` analyses
+
+## 1. Thinking about our experiment
+
+First, what are the differences between the parent strain of the study
+(CEN.PK113-7D) and the reference strain S288C? The (unfiltered)
+differences of course are the variant calls present in
+`SRR445715.vcf.gz`, as we used the S288C genome as a reference. But, how
+do we find the differences between the evolved strain IMW004 and its
+parent CEN.PK113-7D? For this, we can also use bcftools:
+
+```         
+bcftools isec -C SRR445716.vcf.gz SRR445715.vcf.gz > present_in_IMW004_absent_in_CEN.PK113-7D.txt
+```
+
+From this analysis, we can see there are a number of variants present in
+IMW004 that were not present in its parent strain.
+
+Okay, so now the real question. What are the variants, and the gene,
+underlying the newly acquired ability of IMW004 and IMW005 to grow on
+lactate? Since these two strains have evolved completely separately, the
+chance of them sharing an exactly identical variant that is not present
+in their parent strain is extremely low. However, it is certainly
+possible that different variants in the two strains will affect the same
+genomic feature (*e.g.*, the same gene), which could then be taken as
+evidence that this gene may be of importance for the observed biological
+effect (growth on lactate in this case). **Hint 2:** Study the
+`bcftools isec` and `bcftools merge` commands.
+
+[**Can you think of a way to obtain a list of candidates that may
+underlie the ability of these strains to grow on lactate?**]{.underline}
+Hint: You can assume that variants shared by both IMW004 and IMW005 are
+likely to have arisen before the start of the experiment (*i.e.*, from
+the unsequenced initial *jen1* delta strain), and therefore are not
+biologically interesting. [**How many variants (unfiltered) are in
+IMW004 that are not shared by any other strain?**]{.underline}
+
+To identify candidates underlying lactate growth, we focused on variants
+that are:
+
+-   Present in either IMW004 or IMW005
+
+-   Absent from their parental strain (CEN.PK113-7D)
+
+-   Not shared between IMW004 and IMW005 (to exclude background
+    mutations from the jen1Δ ancestor)
+
+Such unique variants are more likely to have arisen independently during
+adaptation and may affect the same gene via different mutations.
+
+Next, to focus on **unique variants**, we removed those shared with
+IMW005 (SRR445717.vcf.gz). To do this properly, we will convert the file
+into a valid VCF (with headers) using `bcftools isec -w1 -O v`, and then
+apply:
+
+```         
+bcftools isec -w1 -O v -p isec_IMW004 SRR445716.vcf.gz SRR445715.vcf.gz
+
+module load htslib/1.9
+
+bgzip isec_IMW004/0000.vcf
+bcftools index isec_IMW004/0000.vcf.gz
+
+bcftools isec -C isec_IMW004/0000.vcf.gz SRR445717.vcf.gz -w1 > IMW004_only.vcf
+```
+
+This final file contains variants **present only in IMW004**, and **not
+in the parent nor in IMW005**.
+
+```         
+grep -v "^#" IMW004_only.vcf | wc -l
+```
+
+We found **209 unique unfiltered variants** in IMW004 that are not
+shared with CEN.PK113-7D or IMW005.
+
+Now, can you apply filters to remove those sites that are not
+well-covered? let's set it at DP\>30 and QUAL\>50.
+
+[**How many variants remain in IMW004 after filtering?**]{.underline}
+
+We applied filters to retain only high-confidence variants in IMW004,
+using the expression `DP > 30 && QUAL > 50`. This removed poorly
+supported sites from the set of private variants.
+
+Using the following command:
+
+```         
+bcftools view -i'DP>30 && QUAL>50' IMW004_only.vcf -Ov -o IMW004_only.filtered.vcf
+
+grep -v "^#" IMW004_only.filtered.vcf | wc -l
+```
+
+We found **20 variants** that remain after filtering.
+
+Now, do the same you did for IMW004 but now for IMW005.
+
+[**How many variants remain in IMW005 after filtering?**]{.underline}
+
+```         
+bcftools isec -w1 -O v -p isec_IMW005 SRR445717.vcf.gz SRR445715.vcf.gz
+
+bgzip isec_IMW005/0000.vcf
+bcftools index isec_IMW005/0000.vcf.gz
+
+bcftools isec -C isec_IMW005/0000.vcf.gz SRR445716.vcf.gz -w1 > IMW005_only.vcf
+
+bcftools view -i'DP>30 && QUAL>50' IMW005_only.vcf -Ov -o IMW005_only.filtered.vcf
+
+grep -v "^#" IMW005_only.filtered.vcf | wc -l
+```
+
+We identified variants exclusive to IMW005 by comparing it against the
+parent strain (CEN.PK113-7D) and removing any variants also found in
+IMW004.
+
+This yielded **15 variants** after filtering.
+
+## 2. Running Ensembl VEP and obtaining the information about biological consequences
+
+Now we will run Ensembl VEP on our files and see what gene consequences
+our mutations have. Previous to this, I installed the yeast cache (a
+local database so we don't have to connect to the database in the UK) in
+my home directory, so we can use these. To run VEP:
+
+```         
+module load vep/r99.2
+vep --cache --dir_cache /home/drobles/.vep/ \
+    -i IMW004_only.filtered.vcf \
+    -o IMW004_only.filtered.vep.vcf \
+    --vcf --species "saccharomyces_cerevisiae"
+    
+vep --cache --dir_cache /home/drobles/.vep/ \
+    -i IMW005_only.filtered.vcf \
+    -o IMW005_only.filtered.vep.vcf \
+    --vcf --species "saccharomyces_cerevisiae"
+```
+
+[**What do all the options that we added to the command
+mean?**]{.underline} **Hint:** Look at the full options in
+<http://www.ensembl.org/info/docs/tools/vep/script/vep_options.html>.
+
+-   `--cache`: use local annotation files (faster and doesn't require
+    internet).
+
+-   `--dir_cache /home/drobles/.vep/`: points to the yeast cache
+    previously downloaded.
+
+-   `-i`: input file with variants (`IMW004_only.filtered.vcf` or
+    `IMW005_only.filtered.vcf`)
+
+-   `-o`: output file with annotation.
+
+-   `--vcf`: tells VEP to produce a VCF output format
+
+-   `--species`: selects the right genome/annotation (Saccharomyces
+    cerevisiae).
+
+[**Look at the output VCF. What happened to the original VCF? Did VEP
+add an annotation? Which one?**]{.underline}
+
+VEP added annotations under the `INFO` field of the output VCF
+(`.vep.vcf`). The main field added is `CSQ`, which gives biological
+consequences such as:
+
+-   Type of variant (e.g., missense_variant, synonymous_variant)
+
+-   Impact level (e.g., HIGH, MODERATE)
+
+-   Gene name and transcript ID
+
+## 3. Making sense of our results
+
+Run VEP on both IMW004 and IMW005 filtered VCF files. Study the output
+very well. Now create a program in your favourite language that outputs:
+
+-   Genes are mutated in any or both of the files
+
+-   What mutation is present in what strain
+
+Did you find the original mutations found by the authors in the ADY2
+gene?
+
+```         
+YBR219C YBR219C_mRNA    SRR445716   frameshift_variant, 103-106 HFFF/HFFFX
+YBR300C YBR300C_mRNA    SRR445716   frameshift_variant, 120 V/DX
+YCR010C (ADY2)  YCR010C_mRNA    SRR445716   missense_variant, 252 A/G
+YCR010C (ADY2)  YCR010C_mRNA    SRR445717   missense_variant, 219 L/V
+YDR534C (FIT1)  YDR534C_mRNA    SRR445717   missense_variant, 310 E/G
+YFL023W (BUD27) YFL023W_mRNA    SRR445717   missense_variant, 493 V/I
+YHR213W-B   YHR213W-B_mRNA  SRR445717   missense_variant, 44 T/R
+YKL030W YKL030W_mRNA    SRR445716   frameshift_variant, 25 Y/YX
+YMR245W YMR245W_mRNA    SRR445716   frameshift_variant, 174-175 NI/NIX
+```
+
+Yes, the ADY2 gene is mutated in both strains and the amino acid changes
+are different.
+
+[**Filter the consequences to only keep those that are either missense,
+stop gained, frameshift, splice acceptor or splice donor. These are
+typically the mutations that are predicted to directly affect protein
+function. How many genes are mutated with any of these consequences in
+both strains?**]{.underline}
+
+Only one gen are mutated in both strains, this gene is ADY2.
+
+The code implement was:
+
+```         
+#!/usr/bin/perl
+#
+use strict;
+use warnings;
+my $root = "/mnt/atgc-d1/bioinfoII/yhernandezg/ExerciseVariantCalling";
+my %files = (
+    'SRR445716' => "$root/IMW004_only.filtered.vep.vcf",
+  'SRR445717' => "$root/IMW005_only.filtered.vep.vcf" );
+
+my %mutations;
+my @csqs_to_keep = ( 'missense', 'frameshift', 'stop', 'splice' );
+#obtain recurrently mutated genes
+foreach my $file ( keys %files ){
+        open( FILE, $files{ $file } ) or die;
+        while( <FILE> ){
+            if( $_ =~ /^\#/ ){ next; }
+            if( $_ =~ /CSQ\=([^\t]+)/ ){
+                  my @csqs = split( /\,/, $1 );
+                  foreach my $csq ( @csqs ){
+                          my @fields = split( /\|/, $csq );
+                          my ( $gene, $tr, $csq, $aa ) = 
+                            ( 'undefined', 'undefined', 'undefined', 'undefined' );
+                          #check if we are interested in the consequence, if not, discard
+                          if( !grep{ $fields[1] =~ /$_/ } @csqs_to_keep ){ next; }
+                          if( defined( $fields[4] ) ){ #this is the gene name
+                                  $gene = $fields[4];
+                                  if( $fields[3] ne '' ){
+                                          $gene .= " ($fields[3])";
+                               }
+                          }
+                          if( defined( $fields[6] ) ){ #this is the transcript
+                                  $tr = $fields[6];
+                          }
+                          if( defined( $fields[1] ) ){ #this is the consequence
+                                  $csq = $fields[1];
+                          }
+                          #this is aa info
+                          if( defined( $fields[14] ) and defined( $fields[15] ) ){ 
+                                  $aa = $fields[14] . ' ' . $fields[15];
+                          }
+                          #save in results hash: gene, transcript, sample, consequence and aa
+                          $mutations{ $gene }{ $tr }{ $file } = $csq . ", " . $aa;
+                  }
+          }
+   }
+close( FILE );
+}
+#print results
+foreach my $gene ( sort keys %mutations ){
+    foreach my $tr ( sort keys %{ $mutations{ $gene } } ){
+            foreach my $sample ( sort keys %{ $mutations{ $gene }{ $tr } } ){
+                    print ( $gene . "\t" . $tr . "\t" . $sample . "\t" . $mutations{ $gene }{ $tr }{ $sample } . "\n" );
+          }
+     }
+}
+
+my $count = 0;
+foreach my $gene ( keys %mutations ) {
+    my $in_716 = 0;
+    my $in_717 = 0;
+    foreach my $tr ( keys %{ $mutations{$gene} } ) {
+        $in_716 = 1 if exists $mutations{$gene}{$tr}{'SRR445716'};
+        $in_717 = 1 if exists $mutations{$gene}{$tr}{'SRR445717'};
+    }
+    if ( $in_716 and $in_717 ) {
+        $count++;
+    }
+}
+print "\nGenes mutados en ambas cepas con consecuencias filtradas: $count\n";
+```
+
+The outfile was the following the files:
+
+[IMW004_only.filtered.vep.vcf](<https://github.com/YaelHernG/Variant-Calling/blob/main/files/IMW004_only.filtered.vep.vcf>)
+
+[IMW005_only.filtered.vep.vcf](<https://github.com/YaelHernG/Variant-Calling/blob/main/files/IMW005_only.filtered.vep.vcf>)
+
+# **Day 3:** Using the Ensembl API to obtain more information about our candidates
+
+Now write a script that retrieves information for all the genes in your
+candidate list. Do this bit after doing the Ensembl REST API tutorial so
+you know what to do!
+
+```{r}
+# Cargar archivos anotados por VEP
+vcf_files <- c("IMW004_only.filtered.vep.vcf", "IMW005_only.filtered.vep.vcf")
+
+# Consecuencias relevantes
+relevant_terms <- c("missense", "frameshift", "stop", "splice")
+
+# Vector para guardar IDs de genes
+gene_ids <- c()
+for (file in vcf_files) {
+  lines <- readLines(file)
+  lines <- lines[!grepl("^#", lines)]
+
+  for (line in lines) {
+    info <- strsplit(line, "\t")[[1]][8]
+    csq_entry <- regmatches(info, regexpr("CSQ=[^;]+", info))
+    if (length(csq_entry) == 0) next
+    csq_data <- sub("CSQ=", "", csq_entry)
+    annotations <- strsplit(csq_data, ",")[[1]]
+
+    for (ann in annotations) {
+      fields <- strsplit(ann, "\\|")[[1]]
+      if (length(fields) >= 5) {
+        consequence <- fields[2]
+        gene_id <- fields[5]  # Ensembl Gene ID
+
+        if (any(sapply(relevant_terms, function(term) grepl(term, consequence, ignore.case = TRUE)))) {
+          gene_ids <- c(gene_ids, gene_id)
+        }
+      }
+    }
+  }
+}
+
+# Eliminar duplicados
+gene_ids_unique <- unique(gene_ids)
+# Escribir lista a un archivo (opcional)
+writeLines(gene_ids_unique, "gene_ids_postfilter.txt")
+
+```
+
+```{r}
+library(jsonlite)
+library(httr)
+library(tidyr)
+
+# Función para hacer consulta POST a Ensembl REST API
+fetch_endpoint_POST <- function(server, request, data, content_type = 'application/json'){
+  r <- POST(paste0(server, request), 
+            httr::content_type(content_type), 
+            accept(content_type), 
+            body = data)
+  stop_for_status(r)
+  if (content_type == "application/json"){
+    return(fromJSON(content(r, "text", encoding = "UTF-8")))
+  } else {
+    return(content(r, "text", encoding = "UTF-8"))
+  }
+}
+
+# Leer los IDs desde el archivo generado antes
+gene_ids <- readLines("gene_ids_postfilter.txt")
+ids_query <- toJSON(list(ids = gene_ids))
+
+# Hacer consulta a Ensembl REST
+ensembl_server <- "https://rest.ensembl.org/"
+lookup_ext_post <- "lookup/id/"
+lookup_res <- fetch_endpoint_POST(ensembl_server, lookup_ext_post, ids_query, "application/json")
+
+# Procesar respuesta
+gene_info <- c()
+for (gene in lookup_res) {
+  gene_info <- c(gene_info, paste0(gene$object_type, "{", gene$display_name, "{", gene$db_type, "{", gene$source, "{", gene$canonical_transcript, "{", gene$logic_name, "{", gene$biotype, "{", gene$description, "{", gene$assembly_name, "{", gene$end, "{", gene$start, "{", gene$seq_region_name, "{", gene$strand, "{", gene$id))  
+}
+
+# Convertir a data.frame estructurado
+gene_info_df <- as.data.frame(gene_info)
+colnames(gene_info_df) <- "raw"
+gene_info_df <- separate(gene_info_df, "raw", 
+                         into = c("Object type", "Display name", "db type", "Source", "Canonical transcript", "Logic name", "Biotype", "Description", "Assembly name", "End", "Start", "Seq region name", "Strand", "Gene id"), 
+                         sep = "\\{")
+
+# Guardar en archivo
+write.table(gene_info_df, "gene_info_from_ensembl.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+```{r, echo=FALSE, message=FALSE}
+knitr::kable(gene_info_df, caption = "Información de genes candidatos anotada con Ensembl REST API")
+```
